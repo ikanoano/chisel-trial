@@ -12,13 +12,19 @@ import scala.collection._
   */
 
 object Config {
-  val KeyWidth    = 32
-  val ValueWidth  = 32
+  val KeyWidth    = 8
+  val ValueWidth  = 4
   val TotalWidth  = KeyWidth + ValueWidth
 }
 class KVS extends Bundle {
-  val key           = UInt(Config.KeyWidth.W)
-  val value         = UInt(Config.ValueWidth.W)
+  val key           = UInt(Config.KeyWidth.W)   // MSB
+  val value         = UInt(Config.ValueWidth.W) // LSB
+  override def toPrintable: Printable = {
+    p"KVS( " +
+    p"k=0x${Hexadecimal(key)}, " +
+    p"v=0x${Hexadecimal(value)}" +
+    p")"
+  }
 }
 
 class FLiMS (size: Int) extends Module {
@@ -102,22 +108,37 @@ class ParallelMerger (size: Int) extends Module {
 
 class SortingNetwork(size: Int) extends Module {
   val io = IO(new Bundle {
-    val setI          = Input (Vec(size, new KVS())) // input KVS set
-    val setO          = Output(Vec(size, new KVS())) // output KVS set
+    val setI          = Input (Vec(size, new KVS()))
+    val setO          = Output(Vec(size, new KVS()))
   })
 
-  if (size==1) {
-    io.setO := io.setI
-  } else {
-    val cmp   = VecInit.tabulate(size/2)(i => io.setI(i).key>io.setI(i + size/2).key)  // devide records into bigger half and smaller ones
-    val big   = VecInit.tabulate(size/2)(i => Mux( cmp(i), io.setI(i), io.setI(size/2)))
-    val small = VecInit.tabulate(size/2)(i => Mux(!cmp(i), io.setI(i), io.setI(size/2)))
+  assert(size >= 2)
 
+  val cmp   = VecInit.tabulate(size/2)(i => io.setI(i).key>io.setI(i + size/2).key)  // devide records into bigger half and smaller ones
+  val big   = VecInit.tabulate(size/2)(i => Mux( cmp(i), io.setI(i), io.setI(i + size/2)))
+  val small = VecInit.tabulate(size/2)(i => Mux(!cmp(i), io.setI(i), io.setI(i + size/2)))
+
+  if (size==2) {
+    //                 LSB    MSB
+    io.setO         := big ++ small
+  } else {
     val snSmall = Module(new SortingNetwork(size/2))
     val snBig   = Module(new SortingNetwork(size/2))
-    snSmall.io.setI := big
-    snBig.io.setI   := small
-
-    io.setO := snSmall.io.setO ++ snBig.io.setO
+    snSmall.io.setI := small
+    snBig.io.setI   := big
+    //                 LSB(first idx)   MSB(last idx)
+    io.setO         := snBig.io.setO ++ snSmall.io.setO
   }
+
+  //def toPrintable: Printable = {
+  printf(
+    p"SortingNetwork($size)\n" +
+    p"  setI   : ${io.setI}\n" +
+    p"  cmp    : $cmp\n" +
+    p"  big    : $big\n" +
+    p"  small  : $small\n" +
+    p"  setO   : ${io.setO}\n"
+  )
+  //}
+
 }
