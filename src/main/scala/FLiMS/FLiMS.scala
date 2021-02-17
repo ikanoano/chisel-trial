@@ -46,7 +46,7 @@ class ParallelMerger (size: Int) extends Module {
   }
 
   // queues storing setA/setB
-  val qA  = setA.map(i => Queue(i, 8))  // qA(0) is a DeqIO of deq
+  val qA  = setA.map(i => Queue(i, 8))  // qA(0) is a DeqIO of a deq
   val qB  = setB.map(i => Queue(i, 8)).reverse
   val qAValid = qA.map(i => i.valid).reduce(_&&_) // all queues in qA are valid
   val qBValid = qB.map(i => i.valid).reduce(_&&_)
@@ -62,8 +62,8 @@ class ParallelMerger (size: Int) extends Module {
   val cmp       = for(i <- 0 until size) yield cA(i).key > cB(i).key
 
   // stall?
-  // For simplicity, all registers will stall if (1) output is not ready (2) any input queue is not valid
-  val isOutReady= io.setO(0).ready && io.setO(size-1).ready // either FIFO is taken first
+  // For simplicity, all registers will stall if (1) output is not ready or (2) any input queue is not valid
+  val isOutReady= io.setO(0).ready && io.setO(size-1).ready // either FIFO is dequeued first
   val stall     = ~isOutReady || ~qAValid || ~qBValid
   val deqA      = cmp.map( _ && ~stall)
   val deqB      = cmp.map(~_ && ~stall)

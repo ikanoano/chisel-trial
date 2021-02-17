@@ -24,6 +24,16 @@ import scala.util.Random
 class SortSpec extends FreeSpec with ChiselScalatestTester {
   val size = 4
 
+  val keyMask   = ((BigInt(1)<<KeyWidth  ) - 1) << ValueWidth
+  val valueMask = ((BigInt(1)<<ValueWidth) - 1)
+  val totalMask = ((BigInt(1)<<TotalWidth) - 1)
+  def tpl2kvs(t:(Int, Int)) = (BigInt(t._1) << ValueWidth) | BigInt(t._2)
+  def kvs2tpl(kvs:BigInt)   = ( (kvs>>ValueWidth, kvs & valueMask) )
+  def randHalfSeq(s: Int) = Seq.fill(s) (
+    (Random.nextInt(1 <<   KeyWidth.min(8)),
+     Random.nextInt(1 << ValueWidth.min(8)))
+  )
+
   "SortingNetwork should output a soted seqeunce of records which SN takes at the same cycle" in {
     test (
       new Module {
@@ -38,21 +48,10 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
         io.setO       := inner.io.setO.asUInt             // reinterpret cast
       }
     ) { dut =>
-      val keyMask   = ((BigInt(1)<<KeyWidth  ) - 1) << ValueWidth
-      val valueMask = ((BigInt(1)<<ValueWidth) - 1)
-      val totalMask = ((BigInt(1)<<TotalWidth) - 1)
-      def tpl2kvs(t:(Int, Int)) = (BigInt(t._1) << ValueWidth) | BigInt(t._2)
-      def kvs2tpl(kvs:BigInt)   = ( (kvs>>ValueWidth, kvs & valueMask) )
-      println(f"totalMask = 0x$totalMask%X")
-
       for(_ <- 1 to 2048) {
-        def randHalfSeq() = Seq.fill(size/2)(
-          (Random.nextInt(1 << KeyWidth.min(8)  ),
-           Random.nextInt(1 << ValueWidth.min(8)))
-        )
         //  MSB         LSB
         // {7 5 3 1 2 4 6 8} = {2 4 6 8} ++ {7 5 3 1}
-        val dscascSeq = randHalfSeq().sorted.reverse ++ randHalfSeq().sorted
+        val dscascSeq = randHalfSeq(size/2).sorted.reverse ++ randHalfSeq(size/2).sorted
         // {8 7 6 5 4 3 2 1}
         val sortedSeq = dscascSeq.sorted
 
@@ -61,7 +60,6 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
         // {1 2 3 4 5 6 7 8}
         val exInt     = sortedSeq.map(i => tpl2kvs(i)).reduce((z,n) => (z<<TotalWidth) | n)
         val exIntMaskK= Seq.fill(size)(keyMask)       .reduce((z,n) => (z<<TotalWidth) | n)
-        println(f"exIntMaskK = 0x$exIntMaskK%X")
 
         // None of the following is valid due to 'Error: Not in a UserModule. Likely cause: Missed Module() wrap, bare chisel API call, or attempting to construct hardware inside a BlackBox'
         // exInt  = 0.U
@@ -80,6 +78,7 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
 
         // Check if key is sorted; Ignore value
         assert((peekInt & exIntMaskK) == (exInt & exIntMaskK))
+        print(f"key:    0x${peekInt & exIntMaskK}%X\n")
 
         val peekSeq = Seq.tabulate(size)(i => (peekInt >> (TotalWidth*i)) & totalMask).map(kvs2tpl(_))
         // Check if All KVS exists
