@@ -35,10 +35,17 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
         })
         val inner = Module(new SortingNetwork(size))
         inner.io.setI := io.setI.asTypeOf(inner.io.setI)  // reinterpret cast
-        io.setO := inner.io.setO.asUInt                   // reinterpret cast
+        io.setO       := inner.io.setO.asUInt             // reinterpret cast
       }
     ) { dut =>
-      for(_ <- 1 to 100) {
+      val keyMask   = ((BigInt(1)<<KeyWidth  ) - 1) << ValueWidth
+      val valueMask = ((BigInt(1)<<ValueWidth) - 1)
+      val totalMask = ((BigInt(1)<<TotalWidth) - 1)
+      def tpl2kvs(t:(Int, Int)) = (BigInt(t._1) << ValueWidth) | BigInt(t._2)
+      def kvs2tpl(kvs:BigInt)   = ( (kvs>>ValueWidth, kvs & valueMask) )
+      println(f"totalMask = 0x$totalMask%X")
+
+      for(_ <- 1 to 2048) {
         def randHalfSeq() = Seq.fill(size/2)(
           (Random.nextInt(1 << KeyWidth.min(8)  ),
            Random.nextInt(1 << ValueWidth.min(8)))
@@ -49,11 +56,12 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
         // {8 7 6 5 4 3 2 1}
         val sortedSeq = dscascSeq.sorted
 
-        def tpl2kvs(t:(Int, Int)) = BigInt(t._1 << ValueWidth) | BigInt(t._2)
         // {8 6 4 2 1 3 5 7}
         val pokeInt   = dscascSeq.map(i => tpl2kvs(i)).reduce((z,n) => (z<<TotalWidth) | n)
         // {1 2 3 4 5 6 7 8}
         val exInt     = sortedSeq.map(i => tpl2kvs(i)).reduce((z,n) => (z<<TotalWidth) | n)
+        val exIntMaskK= Seq.fill(size)(keyMask)       .reduce((z,n) => (z<<TotalWidth) | n)
+        println(f"exIntMaskK = 0x$exIntMaskK%X")
 
         // None of the following is valid due to 'Error: Not in a UserModule. Likely cause: Missed Module() wrap, bare chisel API call, or attempting to construct hardware inside a BlackBox'
         // exInt  = 0.U
@@ -62,10 +70,23 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
         //        = chiselTypeOf(dut.inner.io.setI(0)).Lit(_.key -> r._1.U, _.value -> r._2.U).asUInt
 
         dut.io.setI.poke(pokeInt.U) // pokeInt(0) goes to LSB of pokeInt.U
+        // dut.clock.step(1) // not required but needed to show printf in dut
+        // dut.io.setO.expect(exInt.U)  // expect() can't allow reversed tie-records - records having the same key but different value.
+
+        val peekInt = dut.io.setO.peek().litValue()
         print(f"poke:   0x$pokeInt%X\n")
-        dut.clock.step(1)
         print(f"expect: 0x$exInt%X\n")
-        dut.io.setO.expect(exInt.U)
+        print(f"peek:   0x$peekInt%X\n")
+
+        // Check if key is sorted; Ignore value
+        assert((peekInt & exIntMaskK) == (exInt & exIntMaskK))
+
+        val peekSeq = Seq.tabulate(size)(i => (peekInt >> (TotalWidth*i)) & totalMask).map(kvs2tpl(_))
+        // Check if All KVS exists
+        assert(sortedSeq == peekSeq.sorted)
+
+
+
         print(f"\n")
       }
     }

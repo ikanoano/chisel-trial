@@ -35,15 +35,15 @@ class SortingNetwork(size: Int) extends Module {
     io.setO         := snBig.io.setO ++ snSmall.io.setO
   }
 
-  //def toPrintable: Printable = {
-  printf(
+  // override def toPrintable: Printable = {  // Module doesn't extend Printable
+  def showState: Printable = {
     p"SortingNetwork($size)\n" +
     p"  setI   : ${io.setI}\n" +
     p"  cmp    : $cmp\n" +
     p"  big    : $big\n" +
     p"  small  : $small\n" +
     p"  setO   : ${io.setO}\n"
-  )
-  //}
+  }
+  printf(p"${this.showState}")
 
 }
