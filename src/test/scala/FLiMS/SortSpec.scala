@@ -9,6 +9,10 @@ import chisel3.tester._
 import org.scalatest.FreeSpec
 import chisel3.experimental.BundleLiterals._
 import scala.util.Random
+// for VCD dump
+import chiseltest.experimental.TestOptionBuilder._
+import chiseltest.internal.WriteVcdAnnotation
+//import treadle.{VerboseAnnotation, WriteVcdAnnotation}
 
 /**
   * This is a trivial example of how to run this Specification
@@ -22,7 +26,7 @@ import scala.util.Random
   * }}}
   */
 class SortSpec extends FreeSpec with ChiselScalatestTester {
-  val size = 4
+  val size = 2
 
   val keyMask   = ((BigInt(1)<<KeyWidth  ) - 1) << ValueWidth
   val valueMask = ((BigInt(1)<<ValueWidth) - 1)
@@ -33,6 +37,54 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
     (Random.nextInt(1 <<   KeyWidth.min(8)),
      Random.nextInt(1 << ValueWidth.min(8)))
   )
+  val largest   = ((BigInt(1)<<Config.KeyWidth) - 1).U(Config.KeyWidth.W)
+
+  //"FLiMS should output 1 sequence of soted records from size-way sequence of sorted records" in {
+
+  "ParallelMerger(2) should output a sequence of merged KVS (2 KVS/cycle) e.g. {(10 9) (8 7) (6 5) (4 3)} when it inputs 2-way of ones (1 KVS/cycle/way) e.g. {9 7 5 3} and {10 8 6 4}" in {
+    test (new ParallelMerger(size)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
+      //init
+      dut.io.setI.foreach{ i => i.initSource().setSourceClock(dut.clock) }
+      dut.io.setO.foreach{ o => o.initSink().setSinkClock(dut.clock) }
+      //dut.io.setO.initSink().setSinkClock(dut.clock)
+
+      fork {
+        // enqueue 9 7 5 3
+        for(i <- 0 until 4) dut.io.setI(0).enqueue((new KVS).Lit(_.key -> (9-2*i).U,  _.value -> 9.U))
+        // backpressure
+        for(_ <- 0 until 4) dut.io.setI(0).enqueue((new KVS).Lit(_.key -> 0.U,        _.value -> 9.U))
+      }.fork {
+        dut.clock.step(10)
+        // enqueue 10 8 6 4
+        for(i <- 0 until 4) dut.io.setI(1).enqueue((new KVS).Lit(_.key -> (10-2*i).U, _.value -> 9.U))
+        // backpressure
+        for(_ <- 0 until 4) dut.io.setI(1).enqueue((new KVS).Lit(_.key -> 0.U,        _.value -> 9.U))
+      }.fork {
+        // remove head (invalid)
+        dut.io.setO(0).expectDequeue((new KVS).Lit(_.key -> largest, _.value -> 0.U))
+        // dequeue 10 8 6 4
+        for(i <- 0 until 4) dut.io.setO(0).expectDequeue((new KVS).Lit(_.key -> (10-2*i).U, _.value -> 9.U))
+        // backpressure - all valid KVS are already out
+        dut.io.setO(0).expectDequeue((new KVS).Lit(_.key -> 0.U, _.value -> 9.U))
+
+        // Free run otherwise the test for setO(1) timeouts because ParallelMerger will stall due to ~setO(0).ready
+        dut.clock.step(1) // required to poke
+        dut.io.setO(0).ready.poke(true.B)
+        dut.clock.step(1) // required to poke
+      }.fork {
+        // head
+        dut.io.setO(1).expectDequeue((new KVS).Lit(_.key -> largest, _.value -> 0.U))
+        // dequeue 9 7 5 3
+        for(i <- 0 until 4) dut.io.setO(1).expectDequeue((new KVS).Lit(_.key -> (9-2*i).U, _.value -> 9.U))
+        // backpressure
+        dut.io.setO(1).expectDequeue((new KVS).Lit(_.key -> 0.U, _.value -> 9.U))
+
+        dut.clock.step(1) // required to poke
+        dut.io.setO(1).ready.poke(true.B)
+        dut.clock.step(1) // required to poke
+      }.join()
+    }
+  }
 
   "SortingNetwork should output a soted seqeunce of records which SN takes at the same cycle" in {
     test (
@@ -48,7 +100,7 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
         io.setO       := inner.io.setO.asUInt             // reinterpret cast
       }
     ) { dut =>
-      for(_ <- 1 to 2048) {
+      for(_ <- 1 to 2) {
         //  MSB         LSB
         // {7 5 3 1 2 4 6 8} = {2 4 6 8} ++ {7 5 3 1}
         val dscascSeq = randHalfSeq(size/2).sorted.reverse ++ randHalfSeq(size/2).sorted
