@@ -16,15 +16,31 @@ class FLiMS (size: Int) extends Module {
   })
 
   val pm      = Module(new ParallelMerger(size))
+
+  // input
   pm.io.setI        <> io.setI
-  pm.io.setO.foreach{ i/*:EnqIO*/ => i.ready := io.setO.ready }
 
-  io.setO.valid     := pm.io.setO(0).valid
-  when(pm.io.setO(0).valid) {assert(pm.io.setO(size-1).valid )}
+  // output: convert Vec(EnqIO(KVS)) into EnqIO(Vec(KVS))
+  // TODO: ignore invalid records
+  val outputBuffer = pm.io.setO.map(Queue(_, 8))  // -> Vec(deqIO(KVS))
+  val isLargestInQueue = outputBuffer(size-1).bits.key === Config.LargestKey
 
+  // All buffer queues takes the common ready signal.
+  // outputBuffer(<size/2) must avoid being dequeued until >size/2 ones become valid.
+  // If there is a LargestKey, remove it
+  outputBuffer.foreach{ _.ready := (io.setO.ready || isLargestInQueue) && outputBuffer(size-1).valid }
+
+  // Valid if outputBuffer is not empty - LargestKey is not counted
+  // outputBuffer(*) are all valid if (size-1) is valid
+  // LargestKey will be silently dequeued because outputBuffer takes ready==1 even if it emits LargestKey
+  io.setO.valid     := outputBuffer(size-1).valid && ~isLargestInQueue
+  when(outputBuffer(size-1).valid) { assert(outputBuffer(0).valid===true.B) }  // ensure that
+
+  //io.setO.bits.zip(outputBuffer.map(_.bits)).foreach{ (out, pmout) => out := pmout } // assign bits
   for(i <- 0 until size) {
-    io.setO.bits(i) := pm.io.setO(i).bits
+    io.setO.bits(i) := outputBuffer(i).bits
   }
+
 }
 
 // Decoupled = EnqIO = .ready(in),  .valid(out), .bits(out)
@@ -66,9 +82,8 @@ class ParallelMerger (size: Int) extends Module {
 
   // dequeued records to be compared
   // Note that cA and cB are the biggest value right after the reset so that they must be taken before any valid value in qA/qB
-  val largest   = ((BigInt(1)<<Config.KeyWidth) - 1).U(Config.KeyWidth.W)
-  val cA        = RegInit(VecInit(Seq.fill(size/2)( (new KVS()).Lit(_.key -> largest) )))
-  val cB        = RegInit(VecInit(Seq.fill(size/2)( (new KVS()).Lit(_.key -> largest) )))
+  val cA        = RegInit(VecInit(Seq.fill(size/2)( (new KVS()).Lit(_.key -> Config.LargestKey) )))
+  val cB        = RegInit(VecInit(Seq.fill(size/2)( (new KVS()).Lit(_.key -> Config.LargestKey) )))
   val cmp       = for(i <- 0 until size/2) yield cA(i).key > cB(i).key
 
   // stall?

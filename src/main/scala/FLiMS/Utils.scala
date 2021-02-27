@@ -8,6 +8,7 @@ object Config {
   val KeyWidth    = 8
   val ValueWidth  = 4
   val TotalWidth  = KeyWidth + ValueWidth
+  val LargestKey  = ((BigInt(1)<<Config.KeyWidth) - 1).U(Config.KeyWidth.W)
 }
 
 class KVS extends Bundle {
@@ -20,3 +21,4 @@ class KVS extends Bundle {
     p")"
   }
 }
+
