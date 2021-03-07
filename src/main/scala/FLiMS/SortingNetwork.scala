@@ -19,24 +19,17 @@ class SortingNetwork(size: Int) extends Module {
 
   assert(size >= 1)
 
-  // FIXME: size==1 is a quick implement for ParallelMerger. Remove later.
-  // SortingNetwork itself doesn't require SortingNetwork(size==1).
   if(size>1) {
     val cmp   = VecInit.tabulate(size/2)(i => io.setI(i).key>io.setI(i + size/2).key)  // devide records into bigger half and smaller ones
     val big   = VecInit.tabulate(size/2)(i => Mux( cmp(i), io.setI(i), io.setI(i + size/2)))
     val small = VecInit.tabulate(size/2)(i => Mux(!cmp(i), io.setI(i), io.setI(i + size/2)))
 
-    if (size==2) {
-      //                 LSB    MSB
-      io.setO         := big ++ small
-    } else {
-      val snSmall = Module(new SortingNetwork(size/2))
-      val snBig   = Module(new SortingNetwork(size/2))
-      snSmall.io.setI := small
-      snBig.io.setI   := big
-      //                 LSB(first idx)   MSB(last idx)
-      io.setO         := snBig.io.setO ++ snSmall.io.setO
-    }
+    val snSmall = Module(new SortingNetwork(size/2))
+    val snBig   = Module(new SortingNetwork(size/2))
+    snSmall.io.setI := small
+    snBig.io.setI   := big
+    //                 LSB(first idx)   MSB(last idx)
+    io.setO         := snBig.io.setO ++ snSmall.io.setO
 
     // override def toPrintable: Printable = {  // Module doesn't extend Printable
     def showState: Printable = {
@@ -47,7 +40,7 @@ class SortingNetwork(size: Int) extends Module {
       p"  small  : $small\n" +
       p"  setO   : ${io.setO}\n"
     }
-    printf(p"${showState}")
+    //printf(p"${showState}")
   } else {
     io.setO := io.setI
   }
