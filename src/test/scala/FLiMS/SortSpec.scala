@@ -48,30 +48,28 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
     }
   }
 
-  "FLiMS should output a sequence of merged KVS (size KVS/cycle) when it inputs size-way of ones" in {
-    test (
-      new Module {
-        // Wrapping FLiMS which outpus a "Vec of KVS".
-        // serialize "Vec of KVS" into UInt to pass it to expect() like verilog does ...
-        val io = IO(new Bundle {
-          val setI  = Vec(size*2, DeqIO(new KVS()))       // input size-way sequence of sorted KVS
-          val setO  = EnqIO(UInt((size*TotalWidth).W))    // output sequence of sorted KVS
-          val cycleCounter = Output(UInt(16.W))           // cycle counter
-        })
-        val inner = Module(new FLiMS(size))
-        inner.io.setI       <> io.setI
-        io.setO.bits        := inner.io.setO.bits.asUInt  // reinterpret cast
-        io.setO.valid       := inner.io.setO.valid
-        inner.io.setO.ready := io.setO.ready
-        val (counter, wrap)  = Counter(true.B, 65536)
-        io.cycleCounter     := counter
-      }
-//    vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv  vcd dump enabled
-    ).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
+  class FlimsWrapper (size:Int) extends Module {
+    // Wrapping FLiMS which outpus a "Vec of KVS".
+    // serialize "Vec of KVS" into UInt to pass it to expect() like verilog does ...
+    val io = IO(new Bundle {
+      val setI  = Vec(size*2, DeqIO(new KVS()))       // input size-way sequence of sorted KVS
+      val setO  = EnqIO(UInt((size*TotalWidth).W))    // output sequence of sorted KVS
+      val cycleCounter = Output(UInt(16.W))           // cycle counter
+    })
+    val inner = Module(new FLiMS(size))
+    inner.io.setI       <> io.setI
+    io.setO.bits        := inner.io.setO.bits.asUInt  // reinterpret cast
+    io.setO.valid       := inner.io.setO.valid
+    inner.io.setO.ready := io.setO.ready
+    val (counter, wrap)  = Counter(true.B, 65536)
+    io.cycleCounter     := counter
+  }
+
+  // seqlen = # of KVS per a sequence
+  def flimsTest(dut: FlimsWrapper, seqlen: Int, stall: Boolean) = {
       dut.io.setI.foreach{ _.initSource().setSourceClock(dut.clock) }
       dut.io.setO.initSink().setSinkClock(dut.clock)
 
-      val seqlen      = 128   // # of KVS per a sequence
       val orgSeq      = randSeq(seqlen*size*2)
       val testSeq     = orgSeq.grouped(seqlen).map(_.sorted.reverse).toSeq
       val sortedSeq   = (orgSeq ++ Seq.fill(size)((0,0))).sorted.reverse.toSeq
@@ -80,7 +78,10 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
       val startCycle       = dut.io.cycleCounter.peek().litValue()
       val ctx = for (i <- 0 until size*2) yield fork {
         // enqueue kvs
-        dut.io.setI(i).enqueueSeq(testSeq(i).map{ case (k,v) => (new KVS).Lit(_.key -> k.U,  _.value -> v.U) })
+        testSeq(i).map{ case (k,v) => (new KVS).Lit(_.key -> k.U,  _.value -> v.U) }.foreach{ e =>
+          if (stall && Random.nextInt(10)==1) dut.clock.step(Random.nextInt(10))
+          dut.io.setI(i).enqueue(e)
+        }
 
         // backpressure
         backpressure(dut.io.setI(i), () => complete/*!dut.io.setO.ready.peek().litToBoolean*/, dut.clock)
@@ -94,7 +95,8 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
           dut.io.setO.ready.poke(true.B)  // free run
           // Test peek KVS
           val peekSeq = (for(_ <- 0 until 2*seqlen+1) yield {  // testSeq ++ backpressure expected
-            dut.clock.step(1)
+            dut.clock.step(1) // mandatory
+            if (stall && Random.nextInt(10)==1) dut.clock.step(Random.nextInt(10))
             dut.io.setO.waitForValid()
             invFlattenKVS(dut.io.setO.peek().litValue())
           }).flatMap(i=>i)
@@ -109,14 +111,31 @@ class SortSpec extends FreeSpec with ChiselScalatestTester {
           // Check if All KVS exists
           assert(peekSeq.sorted.reverse == sortedSeq)
           // Check if elapsed cycle is reasonabled
-          assert(elapsed < seqlen*2.2)
+          assert(elapsed < (seqlen * 2.3).toInt)
         }
 
         //print(f"peek:   $peekSeq\n")
         //print(f"sorted: $sortedSeq\n")
       }.join()  // join needed to suppress 'non-enclosed timescope'
       ctx.foreach{_.join()}
+  }
 
+
+  "FLiMS should output a sequence of merged KVS (size KVS/cycle) when it inputs size-way of ones" in {
+    test (
+      new FlimsWrapper(size)
+//    vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv  vcd dump enabled
+    ).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
+      flimsTest(dut, 128, false)
+    }
+  }
+
+  "FLiMS should output a sequence of merged KVS (size KVS/cycle) when it inputs size-way of ones with stall" in {
+    test (
+      new FlimsWrapper(size)
+//    vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv  vcd dump enabled
+    ).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
+      flimsTest(dut, 128, true)
     }
   }
 
